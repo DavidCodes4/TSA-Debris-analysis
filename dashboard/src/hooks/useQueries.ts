@@ -4,6 +4,8 @@ import {
   fetchHighRiskCollisions, fetchDebris, fetchDebrisById,
   fetchGlobeCollisions, fetchDashboardStats,
   fetchSimulationTime, fetchCollisionFrequency, fetchAllCollisions,
+  fetchTsaState, fetchTsaForecast, fetchTsaConjunctions, fetchPipelineStatus,
+  fetchTrajectory, fetchAllTrajectories,
 } from '../api/debrisApi';
 
 const REFETCH = 30_000; // 30 s
@@ -75,4 +77,56 @@ export const useAllCollisions = (params: Parameters<typeof fetchAllCollisions>[0
     queryKey: ['allCollisions', params],
     queryFn:  () => fetchAllCollisions(params),
     refetchInterval: REFETCH,
+  });
+
+// ── TSA Pipeline hooks ────────────────────────────────────────────────────────
+
+export const useTsaState = () =>
+  useQuery({
+    queryKey: ['tsaState'],
+    queryFn:  fetchTsaState,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+
+export const useTsaForecast = () =>
+  useQuery({
+    queryKey: ['tsaForecast'],
+    queryFn:  fetchTsaForecast,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+
+export const useTsaConjunctions = (riskLevel?: string) =>
+  useQuery({
+    queryKey: ['tsaConjunctions', riskLevel],
+    queryFn:  () => fetchTsaConjunctions(riskLevel),
+    refetchInterval: REFETCH,
+    retry: false,
+  });
+
+export const usePipelineStatus = () =>
+  useQuery({
+    queryKey: ['pipelineStatus'],
+    queryFn:  fetchPipelineStatus,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+
+// ── Trajectory hooks ──────────────────────────────────────────────────────────
+
+export const useTrajectory = (noradId: string | null, downsample = 1) =>
+  useQuery({
+    queryKey: ['trajectory', noradId, downsample],
+    queryFn:  () => fetchTrajectory(noradId!, downsample),
+    enabled:  !!noradId,
+    staleTime: 5 * 60_000, // 5 min — trajectories don't change
+  });
+
+export const useAllTrajectories = (params?: Parameters<typeof fetchAllTrajectories>[0]) =>
+  useQuery({
+    queryKey: ['allTrajectories', params],
+    queryFn:  () => fetchAllTrajectories(params),
+    staleTime: 5 * 60_000,
+    retry: false,
   });

@@ -151,7 +151,7 @@ export default function CollisionAlerts() {
           </div>
         </div>
       ) : (
-        <EmptyState title="No collision alerts" message="Run CollisionDetector.scala to generate alerts" />
+        <EmptyState title="No collision alerts" message="Run: make pipeline — then restart the API" />
       )}
     </div>
   );

@@ -7,6 +7,12 @@ import type {
   DebrisListResponse,
   DebrisObject,
   GlobeCollisionsResponse,
+  ForecastResults,
+  DashboardState,
+  ConjunctionReport,
+  PipelineStatusResponse,
+  TrajectoryResponse,
+  AllTrajectoriesResponse,
 } from './types';
 
 export async function fetchHealth(): Promise<HealthResponse> {
@@ -94,5 +100,49 @@ export async function fetchAllCollisions(params: {
   risk_level?: string;
 }): Promise<import('./types').RefCollisionListResponse> {
   const { data } = await apiClient.get('/collisions/all', { params });
+  return data;
+}
+
+// ── TSA Pipeline API ──────────────────────────────────────────────────────────
+
+export async function fetchTsaState(): Promise<DashboardState> {
+  const { data } = await apiClient.get('/tsa/state');
+  return data;
+}
+
+export async function fetchTsaForecast(): Promise<ForecastResults> {
+  const { data } = await apiClient.get('/tsa/forecast');
+  return data;
+}
+
+export async function fetchTsaConjunctions(riskLevel?: string): Promise<ConjunctionReport> {
+  const params = riskLevel && riskLevel !== 'ALL' ? { risk_level: riskLevel } : undefined;
+  const { data } = await apiClient.get('/tsa/conjunctions', { params });
+  return data;
+}
+
+export async function fetchPipelineStatus(): Promise<PipelineStatusResponse> {
+  const { data } = await apiClient.get('/pipeline/status');
+  return data;
+}
+
+// ── Trajectory API ────────────────────────────────────────────────────────────
+
+export async function fetchTrajectory(
+  noradId: string,
+  downsample = 1,
+): Promise<TrajectoryResponse> {
+  const { data } = await apiClient.get('/debris/trajectory', {
+    params: { norad_id: noradId, downsample },
+  });
+  return data;
+}
+
+export async function fetchAllTrajectories(params?: {
+  downsample?: number;
+  regime?: string;
+  limit?: number;
+}): Promise<AllTrajectoriesResponse> {
+  const { data } = await apiClient.get('/debris/trajectories/all', { params });
   return data;
 }

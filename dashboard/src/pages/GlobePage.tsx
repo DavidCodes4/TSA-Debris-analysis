@@ -379,7 +379,7 @@ export default function GlobePage() {
             <AlertTriangle className="w-10 h-10 text-yellow-400 mb-2" />
             <p className="text-yellow-300 text-sm text-center px-8">
               Collision data found but no ECI position coordinates present.<br />
-              Run <code className="bg-slate-700 px-1 rounded">CollisionDetector</code> to generate approach positions.
+              Re-run: <code className="bg-slate-700 px-1 rounded">make pipeline</code> (step 4 conjunction assessment).
             </p>
           </div>
         )}
@@ -390,7 +390,8 @@ export default function GlobePage() {
             <Globe2 className="w-10 h-10 text-slate-600 mb-2" />
             <p className="text-slate-500 text-sm text-center px-8">
               No collision data yet.<br />
-              Run the pipeline: <code className="bg-slate-700 px-1 rounded">TLEProcessor</code> → <code className="bg-slate-700 px-1 rounded">CollisionDetector</code>
+              Run: <code className="bg-slate-700 px-1 rounded">make pipeline</code> — or just step 4:<br />
+              <code className="bg-slate-700 px-1 rounded text-xs">python scripts/models/run_pipeline.py --steps 4 5</code>
             </p>
           </div>
         )}

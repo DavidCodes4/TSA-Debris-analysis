@@ -19,6 +19,7 @@
 13. [End-to-End Data Flow](#13-end-to-end-data-flow)
 14. [ML Models — Deep Dive](#14-ml-models--deep-dive)
 15. [Live Pipeline Run — What Happens Every 5 Minutes](#15-live-pipeline-run--what-happens-every-5-minutes)
+15b. [Trajectory Visualisation](#15b-trajectory-visualisation)
 16. [Numbers At a Glance](#16-numbers-at-a-glance)
 
 ---
@@ -74,11 +75,27 @@ Space-Debris-Risk-Prediction/
 ├── live_ingest.py                   ← Python: HDFS archive → SGP4 → RF → HDFS parquet
 ├── pipeline_scheduler.py            ← Python: Airflow replacement scheduler
 ├── run_pipeline.sh                  ← Shell: start/stop/status/logs helper
+├── dashboard_api.py                 ← Flask REST API (port 5050) — serves dashboard
+│
+├── notebooks/
+│   ├── space_debris_ts_analysis.ipynb ← 12-section TSA analysis
+│   ├── tar_star_analysis.ipynb        ← SETAR/LSTAR/ESTAR/TAR-VAR regime models
+│   └── trajectory_visualisation.ipynb ← 8-section Plotly trajectory notebook
 │
 ├── build.sbt                        ← Scala/Spark/Orekit/Kafka dependencies
 ├── orekit-data/                     ← Orekit earth orientation, ephemeris, weather data
 │
+├── dashboard/                       ← React + Vite + TypeScript dashboard
+│   └── src/pages/
+│       ├── GlobePage.tsx            ← 3D WebGL Earth
+│       ├── Analytics.tsx            ← Model benchmarks
+│       ├── CollisionAlerts.tsx      ← Conjunction table
+│       ├── DebrisObjects.tsx        ← Catalog view
+│       ├── TrajectoryPage.tsx       ← Animated ground tracks (globe.gl)
+│       └── SystemStatus.tsx         ← Pipeline health
+│
 └── Output/
+    ├── ts_df.parquet                ← 200 objects × 865 timesteps (ECI state vectors)
     └── space_debris_catalog.csv     ← Catalog of all tracked objects (35,731 rows)
 ```
 
@@ -719,6 +736,112 @@ T+0:45     Saved to HDFS: batch_20260305_103015
 T+0:45     Published 126 alerts to Kafka: space_debris_collisions
 T+0:45   Run #1 complete in 22.3s
 T+5:00   Scheduler wakes up again → Run #2
+```
+
+---
+
+## 15b. Trajectory Visualisation
+
+**Files:**
+- `notebooks/trajectory_visualisation.ipynb` — 8-section interactive Plotly notebook
+- `dashboard/src/pages/TrajectoryPage.tsx` — React page with animated globe.gl ground tracks
+- `dashboard_api.py` endpoints: `/api/debris/trajectory` and `/api/debris/trajectories/all`
+
+### What the Notebook Shows
+
+The notebook operates on `Output/ts_df.parquet` — 200 debris/satellite objects × 865 timesteps, ECI (x, y, z) state vectors at 5-minute cadence over a 72-hour window.
+
+| Section | Chart | Content |
+|---|---|---|
+| 1 | 3D ECI Orbit | Single object — Earth sphere + trajectory coloured by time (0–72 h) |
+| 2 | Ground Track | Mercator world map — lat/lon path with start/end markers |
+| 3 | Altitude & Speed | Dual-panel time-series — perigee/apogee callout markers |
+| 4 | Multi-Object 3D | 5 representative objects on one 3D plot, coloured by NORAD ID |
+| 5 | All 200 Ground Tracks | Full map — coloured by orbit regime (LEO/MEO/HEO/GEO) |
+| 6 | Animated Ground Track | Frame-by-frame playback along a single object's path |
+| 7 | Conjunction Pair | 3D orbit of two closest-approach objects + closest-point marker |
+| 8 | Altitude Histogram | Regime distribution across all 200 objects |
+
+### ECI → Geodetic Conversion
+
+The notebook and API both use a helper to convert ECI Cartesian (km) to geographic coordinates:
+
+```python
+def eci_to_geodetic(x, y, z, timestamp):
+    # Compute Greenwich Sidereal Time from Julian Date
+    gst = ... 
+    # Rotate ECI to ECEF
+    lon = atan2(y_ecef, x_ecef)       # longitude (degrees)
+    lat = atan2(z, sqrt(x² + y²))     # geocentric latitude (degrees)
+    alt = sqrt(x² + y² + z²) − 6371   # altitude above surface (km)
+    return lat, lon, alt
+```
+
+### Orbit Regime Classification
+
+```python
+def altitude_regime(alt_km):
+    if   alt_km <  2_000: return "LEO"   # Low Earth Orbit
+    elif alt_km < 20_000: return "MEO"   # Medium Earth Orbit
+    elif alt_km < 40_000: return "GEO"   # Geostationary
+    else:                 return "HEO"   # Highly Elliptical Orbit
+```
+
+### Dashboard Trajectory Page (`/trajectories`)
+
+The `TrajectoryPage.tsx` component renders an interactive globe.gl scene:
+
+- **Globe display** — animated dashed arcs showing current 72-hour ground track for all 200 objects
+- **Regime filter chips** — click LEO/MEO/HEO/GEO to show only objects in that shell
+- **Object list panel** — scrollable list with altitude + speed; click any row to:
+  - Zoom globe camera to the object's current position
+  - Show a detail card: NORAD ID, altitude, speed, orbital regime, trajectory span
+- **Arc animation** — arcs pulse along the ground track direction to indicate direction of travel
+
+### New Flask API Endpoints
+
+#### `GET /api/debris/trajectory`
+
+Returns the full 72-hour trajectory for one object.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `norad_id` | required | NORAD catalogue number |
+| `downsample` | `1` | Keep every N-th timestep (1 = all 865 points) |
+
+**Response:**
+```json
+{
+  "norad_id": 25544,
+  "object_name": "ISS (ZARYA)",
+  "altitude_regime": "LEO",
+  "points": [
+    { "timestamp": "2025-01-01T00:00:00", "x": 4215.3, "y": -3874.1, "z": 3123.6,
+      "lat": 23.4, "lon": -45.2, "altitude_km": 415.3, "speed_kms": 7.66 },
+    ...
+  ]
+}
+```
+
+#### `GET /api/debris/trajectories/all`
+
+Returns lightweight ground-track data for all (or a filtered subset of) objects.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `downsample` | `12` | Keep every 12th point (~1 per hour) |
+| `regime` | *(all)* | Filter by `LEO`, `MEO`, `GEO`, or `HEO` |
+| `limit` | `200` | Maximum number of objects to return |
+
+**Response:**
+```json
+{
+  "objects": [
+    { "norad_id": 25544, "altitude_regime": "LEO",
+      "track": [{ "lat": 23.4, "lon": -45.2, "altitude_km": 415.3 }, ...] }
+  ],
+  "total": 200
+}
 ```
 
 ---

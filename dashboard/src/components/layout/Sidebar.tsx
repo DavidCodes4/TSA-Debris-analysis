@@ -2,16 +2,17 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, AlertTriangle, Satellite, BarChart3,
-  Activity, ChevronLeft, ChevronRight, Globe2,
+  Activity, ChevronLeft, ChevronRight, Globe2, Orbit,
 } from 'lucide-react';
 
 const navItems = [
-  { to: '/',           icon: LayoutDashboard, label: 'Command Center' },
-  { to: '/collisions', icon: AlertTriangle,    label: 'Collision Alerts' },
-  { to: '/globe',      icon: Globe2,           label: '3D Globe' },
-  { to: '/debris',     icon: Satellite,        label: 'Debris Objects' },
-  { to: '/analytics',  icon: BarChart3,        label: 'Analytics' },
-  { to: '/system',     icon: Activity,         label: 'System Status' },
+  { to: '/',              icon: LayoutDashboard, label: 'Command Center' },
+  { to: '/collisions',    icon: AlertTriangle,   label: 'Collision Alerts' },
+  { to: '/globe',         icon: Globe2,          label: '3D Globe' },
+  { to: '/trajectories',  icon: Orbit,           label: 'Trajectories' },
+  { to: '/debris',        icon: Satellite,       label: 'Debris Objects' },
+  { to: '/analytics',     icon: BarChart3,       label: 'Analytics & TSA' },
+  { to: '/system',        icon: Activity,        label: 'Pipeline Status' },
 ];
 
 export default function Sidebar() {
@@ -26,8 +27,8 @@ export default function Sidebar() {
         </div>
         {!collapsed && (
           <div className="overflow-hidden">
-            <h1 className="text-sm font-bold text-text-primary tracking-wider">SDRPS</h1>
-            <p className="text-[10px] text-text-muted leading-none">Debris Risk Prediction</p>
+            <h1 className="text-sm font-bold text-text-primary tracking-wider">TSA · Debris</h1>
+            <p className="text-[10px] text-text-muted leading-none">Time-Series Analysis</p>
           </div>
         )}
       </div>

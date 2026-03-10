@@ -7,6 +7,7 @@ import DebrisObjects from './pages/DebrisObjects';
 import Analytics from './pages/Analytics';
 import SystemStatus from './pages/SystemStatus';
 import GlobePage from './pages/GlobePage';
+import TrajectoryPage from './pages/TrajectoryPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,12 +25,13 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route element={<AppShell />}>
-            <Route path="/"            element={<CommandCenter />} />
-            <Route path="/collisions"  element={<CollisionAlerts />} />
-            <Route path="/globe"       element={<GlobePage />} />
-            <Route path="/debris"      element={<DebrisObjects />} />
-            <Route path="/analytics"   element={<Analytics />} />
-            <Route path="/system"      element={<SystemStatus />} />
+            <Route path="/"              element={<CommandCenter />} />
+            <Route path="/collisions"    element={<CollisionAlerts />} />
+            <Route path="/globe"         element={<GlobePage />} />
+            <Route path="/trajectories"  element={<TrajectoryPage />} />
+            <Route path="/debris"        element={<DebrisObjects />} />
+            <Route path="/analytics"     element={<Analytics />} />
+            <Route path="/system"        element={<SystemStatus />} />
           </Route>
         </Routes>
       </BrowserRouter>

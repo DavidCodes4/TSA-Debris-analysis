@@ -84,3 +84,5 @@ htmlcov/
 *.tmp
 tmp/
 temp/
+
+*.md

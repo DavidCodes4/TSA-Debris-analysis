@@ -12,6 +12,10 @@ scripts/models/
 └── run_pipeline.py            End-to-end orchestrator
 ```
 
+The output of Step 1 (`Output/ts_df.parquet`) is also the data source for:
+- `notebooks/trajectory_visualisation.ipynb` — 8-section Plotly notebook (3D ECI orbits, ground tracks, altitude profiles, animated trajectories)
+- `dashboard/src/pages/TrajectoryPage.tsx` — animated ground-track page served via the trajectory API endpoints
+
 ## Quick Start
 
 ```bash
@@ -95,9 +99,11 @@ Consolidates all pipeline outputs into `Output/dashboard_state.json` and rebuild
 the debris catalog CSV. The Flask API reads these files directly.
 
 New API endpoints (added to `dashboard_api.py`):
-- `GET /api/tsa/state`         — full pipeline state
-- `GET /api/tsa/forecast`      — per-model forecast time-series
-- `GET /api/tsa/conjunctions`  — conjunction report (filterable by risk_level)
+- `GET /api/tsa/state`              — full pipeline state
+- `GET /api/tsa/forecast`           — per-model forecast time-series
+- `GET /api/tsa/conjunctions`       — conjunction report (filterable by risk_level)
+- `GET /api/debris/trajectory`      — 72-hour ECI + geodetic trajectory for one object
+- `GET /api/debris/trajectories/all`— downsampled ground-track lat/lon for all objects
 
 ## Model Architecture: PatchTST
 

@@ -4,9 +4,11 @@ run_pipeline.py
 End-to-end orchestrator — runs all 5 pipeline steps in sequence.
 
 Usage:
-  python scripts/models/run_pipeline.py                # all steps
+  python scripts/models/run_pipeline.py                # all steps, tle2024.txt
   python scripts/models/run_pipeline.py --steps 1 2    # only step 1 & 2
   python scripts/models/run_pipeline.py --steps 4 5    # skip training
+  python scripts/models/run_pipeline.py --tle-all      # run steps 4+5 on every year
+  python scripts/models/run_pipeline.py --continuous   # continuous loop over all years
   python scripts/models/run_pipeline.py --help
 
 Steps
@@ -71,7 +73,20 @@ def main():
         help="Output directory (default: Output/)")
     parser.add_argument(
         "--tle-file",    default="tle2024.txt",
-        help="TLE filename inside data/raw/")
+        help="TLE filename inside data/raw/, or 'ALL' to use every year file")
+    parser.add_argument(
+        "--tle-all-data", action="store_true",
+        help="Shorthand for --tle-file ALL — load all years for step 1")
+    parser.add_argument(
+        "--tle-all", action="store_true",
+        help="Run steps 4+5 over every available TLE year file "
+             "(equivalent to running 06_continuous_detection.py --once)")
+    parser.add_argument(
+        "--continuous", action="store_true",
+        help="Hand off to 06_continuous_detection.py — loop all years forever")
+    parser.add_argument(
+        "--continuous-interval", type=float, default=60.0, metavar="SEC",
+        help="Seconds between loops when --continuous is set (default: 60)")
     parser.add_argument(
         "--max-records", type=int, default=150_000,
         help="Max TLE lines to read (default: 150000)")
@@ -98,10 +113,52 @@ def main():
         help="Conjunction screening time window in hours (default: 24)")
     args = parser.parse_args()
 
+    # ── --continuous: delegate entirely to 06_continuous_detection.py ────────
+    if args.continuous:
+        log.info("Handing off to continuous detection loop …")
+        cd = _import_step("06_continuous_detection.py")
+        # Monkey-patch sys.argv so argparse inside the module gets the right args
+        import sys as _sys
+        _sys.argv = [
+            "06_continuous_detection.py",
+            "--loop",
+            "--interval", str(args.continuous_interval),
+            "--output-dir", args.output_dir,
+            "--screen-km",  str(args.screen_km),
+            "--screen-hours", str(args.screen_hours),
+            "--top-n",      str(args.top_n),
+            "--max-records", str(args.max_records),
+            "--resample-min", str(args.resample_min),
+            "--propagate-hrs", str(args.propagate_hrs),
+        ] + (["--dry-run"] if args.dry_run else [])
+        cd.main()
+        return
+
+    # ── --tle-all: run steps 4+5 for every year (no retraining) ──────────────
+    if args.tle_all:
+        cd = _import_step("06_continuous_detection.py")
+        import sys as _sys
+        _sys.argv = [
+            "06_continuous_detection.py",
+            "--output-dir", args.output_dir,
+            "--screen-km",  str(args.screen_km),
+            "--screen-hours", str(args.screen_hours),
+            "--top-n",      str(args.top_n),
+            "--max-records", str(args.max_records),
+            "--resample-min", str(args.resample_min),
+            "--propagate-hrs", str(args.propagate_hrs),
+        ] + (["--dry-run"] if args.dry_run else [])
+        cd.main()
+        return
+
     steps    = sorted(set(args.steps))
     out_dir  = Path(args.output_dir)
     dry_run  = args.dry_run
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # --tle-all-data is a shorthand for --tle-file ALL
+    if args.tle_all_data:
+        args.tle_file = "ALL"
 
     log.info("╔══════════════════════════════════════════════════════╗")
     log.info("║   SPACE DEBRIS TSA — PIPELINE STARTING              ║")
@@ -146,7 +203,9 @@ def main():
               dry_run=dry_run,
               output_dir=out_dir,
               screen_km=args.screen_km,
-              screen_hours=args.screen_hours)
+              screen_hours=args.screen_hours,
+              tle_file=args.tle_file,
+              append_history=True)
 
     # ── Step 5: Dashboard update ──────────────────────────────────────────────
     if 5 in steps:

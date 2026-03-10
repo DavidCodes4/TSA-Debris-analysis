@@ -127,7 +127,7 @@ export default function CommandCenter() {
             </div>
           ) : (
             <ChartCard title="Closest Approach">
-              <EmptyState title="No collision data yet" message="Run CollisionDetector.scala first" />
+              <EmptyState title="No collision data yet" message="Run: make pipeline" />
             </ChartCard>
           )}
         </div>
@@ -205,7 +205,7 @@ export default function CommandCenter() {
             </table>
           </div>
         ) : (
-          <EmptyState title="No high-risk pairs" message="Run CollisionDetector.scala to detect collision candidates" />
+          <EmptyState title="No high-risk pairs" message="Run: make pipeline to generate collision data" />
         )}
       </ChartCard>
 
@@ -245,7 +245,7 @@ export default function CommandCenter() {
             </table>
           </div>
         ) : (
-          <EmptyState title="No recurring pairs" message="Pairs appear here once collision data is loaded" />
+          <EmptyState title="No recurring pairs" message="Pairs appear here once the pipeline has run" />
         )}
       </ChartCard>
     </div>

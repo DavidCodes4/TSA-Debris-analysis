@@ -77,7 +77,7 @@ export default function DebrisObjects() {
               </div>
             </div>
           ) : (
-            <EmptyState title="No debris catalog" message="Run python debris.py to download the catalog" />
+            <EmptyState title="No debris catalog" message="Run: make pipeline to generate the catalog" />
           )}
         </div>
 

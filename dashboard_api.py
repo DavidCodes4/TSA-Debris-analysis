@@ -27,6 +27,8 @@ Endpoints:
   GET /api/tsa/state
   GET /api/tsa/forecast
   GET /api/tsa/conjunctions         ?risk_level=
+  GET /api/debris/trajectory        ?norad_id=&limit=&downsample=
+  GET /api/debris/trajectories/all  ?limit=&downsample=&regime=
 
 Run:
   pip install flask flask-cors pandas pyarrow
@@ -62,6 +64,8 @@ CATALOG_PATH          = OUTPUT_DIR / "space_debris_catalog.csv"
 DASHBOARD_STATE       = OUTPUT_DIR / "dashboard_state.json"
 FORECAST_RESULTS      = OUTPUT_DIR / "forecast_results.json"
 CONJUNCTION_REPORT    = OUTPUT_DIR / "conjunction_report.json"
+TS_DF_PARQUET         = OUTPUT_DIR / "ts_df.parquet"
+TS_DF_PARQUET         = OUTPUT_DIR / "ts_df.parquet"
 
 
 # ─── Column normalisation ────────────────────────────────────────────────────
@@ -352,6 +356,10 @@ def collisions_globe():
             "detection_timestamp":   str(row.get("detection_timestamp", "")),
             "altitude_km_1":         _safe_float(row.get("altitude_km_1")),
             "altitude_km_2":         _safe_float(row.get("altitude_km_2")),
+            # ECI position coords — frontend uses these to place markers on the globe
+            "approach_position_x":   _safe_float(row.get("pos_x_1")),
+            "approach_position_y":   _safe_float(row.get("pos_y_1")),
+            "approach_position_z":   _safe_float(row.get("pos_z_1")),
         })
 
     return jsonify({"count": len(records), "collisions": records})
@@ -552,6 +560,149 @@ def tsa_conjunctions():
         data["n_alerts"] = len(data["alerts"])
 
     return jsonify(data)
+
+
+# ─── Trajectory endpoints ─────────────────────────────────────────────────────
+
+_TS_DF_CACHE: "pd.DataFrame | None" = None
+
+def _load_ts_df() -> "pd.DataFrame":
+    """Load (and cache) the ts_df.parquet trajectory file."""
+    global _TS_DF_CACHE
+    if _TS_DF_CACHE is not None:
+        return _TS_DF_CACHE
+    if not HAS_PANDAS or not TS_DF_PARQUET.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(str(TS_DF_PARQUET))
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        _TS_DF_CACHE = df
+        logger.info(f"ts_df.parquet loaded: {len(df):,} rows, {df['norad_id'].nunique()} objects")
+        return df
+    except Exception as e:
+        logger.warning(f"Could not load ts_df.parquet: {e}")
+        return pd.DataFrame()
+
+
+def _eci_to_geodetic(x, y, z):
+    """ECI (km) → geodetic lat(deg), lon(deg), alt(km)."""
+    import math as _m
+    r   = _m.sqrt(x*x + y*y + z*z)
+    lat = _m.degrees(_m.atan2(z, _m.sqrt(x*x + y*y)))
+    lon = _m.degrees(_m.atan2(y, x))
+    alt = r - 6371.0
+    return round(lat, 5), round(lon, 5), round(alt, 3)
+
+
+def _altitude_regime(alt_km: float) -> str:
+    if alt_km < 2000:    return "LEO"
+    elif alt_km < 8000:  return "MEO"
+    elif alt_km < 36500: return "HEO"
+    else:                return "GEO"
+
+
+@app.route("/api/debris/trajectory", methods=["GET"])
+def debris_trajectory():
+    """
+    Return the 72-hour ECI trajectory for one debris object.
+
+    Query params:
+      norad_id   (required) — NORAD catalogue ID
+      downsample (optional, default=1) — keep every Nth point (1=all, 6=every 6th)
+    """
+    norad_id = request.args.get("norad_id", "")
+    if not norad_id:
+        return jsonify({"error": "norad_id query param required"}), 400
+
+    downsample = max(1, int(request.args.get("downsample", 1)))
+
+    df = _load_ts_df()
+    if df.empty:
+        return _no_data_yet("Run the pipeline first (step 1 produces ts_df.parquet).")
+
+    sat = df[df["norad_id"].astype(str) == str(norad_id)]
+    if sat.empty:
+        return jsonify({"error": f"NORAD ID {norad_id} not found"}), 404
+
+    sat = sat.sort_values("timestamp").iloc[::downsample]
+
+    points = []
+    for _, row in sat.iterrows():
+        lat, lon, _ = _eci_to_geodetic(row["x"], row["y"], row["z"])
+        points.append({
+            "timestamp": row["timestamp"].isoformat(),
+            "x":          round(float(row["x"]), 3),
+            "y":          round(float(row["y"]), 3),
+            "z":          round(float(row["z"]), 3),
+            "vx":         round(float(row["vx"]), 5),
+            "vy":         round(float(row["vy"]), 5),
+            "vz":         round(float(row["vz"]), 5),
+            "altitude_km": round(float(row["altitude_km"]), 3),
+            "speed_kms":  round(float(row["speed_kms"]), 5),
+            "lat":        lat,
+            "lon":        lon,
+        })
+
+    avg_alt = float(sat["altitude_km"].mean())
+    return jsonify({
+        "norad_id":    str(norad_id),
+        "n_points":    len(points),
+        "regime":      _altitude_regime(avg_alt),
+        "mean_alt_km": round(avg_alt, 2),
+        "trajectory":  points,
+    })
+
+
+@app.route("/api/debris/trajectories/all", methods=["GET"])
+def all_trajectories():
+    """
+    Return lightweight trajectory summaries (ground-track points) for all objects.
+    Designed for the dashboard globe path overlay.
+
+    Query params:
+      downsample (default=12) — keep every Nth point (~72 pts per object at 12)
+      regime     (optional)   — filter by LEO / MEO / HEO / GEO
+      limit      (default=200) — max number of objects
+    """
+    downsample = max(1, int(request.args.get("downsample", 12)))
+    regime_filter = request.args.get("regime", "").upper()
+    limit = min(200, max(1, int(request.args.get("limit", 200))))
+
+    df = _load_ts_df()
+    if df.empty:
+        return _no_data_yet("Run the pipeline first.")
+
+    # Compute mean altitude per object once
+    mean_alts = df.groupby("norad_id")["altitude_km"].mean()
+    all_ids   = mean_alts.index.tolist()
+
+    objects = []
+    for nid in all_ids[:limit]:
+        avg_alt = float(mean_alts[nid])
+        reg     = _altitude_regime(avg_alt)
+        if regime_filter and reg != regime_filter:
+            continue
+
+        sub = df[df["norad_id"] == nid].sort_values("timestamp").iloc[::downsample]
+        lats, lons = [], []
+        for _, row in sub.iterrows():
+            la, lo, _ = _eci_to_geodetic(row["x"], row["y"], row["z"])
+            lats.append(la)
+            lons.append(lo)
+
+        objects.append({
+            "norad_id":    int(nid),
+            "regime":      reg,
+            "mean_alt_km": round(avg_alt, 2),
+            "lats":        lats,
+            "lons":        lons,
+            "n_points":    len(lats),
+        })
+
+    return jsonify({
+        "count":   len(objects),
+        "objects": objects,
+    })
 
 
 if __name__ == "__main__":

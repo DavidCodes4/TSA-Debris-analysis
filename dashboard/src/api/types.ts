@@ -3,9 +3,10 @@
 export type RiskLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
 export interface HealthResponse {
-  status: 'healthy' | 'unhealthy';
-  hdfs:   string;
-  timestamp: string;
+  status:       'healthy' | 'unhealthy';
+  pipeline_ran: boolean;
+  output_dir:   string;
+  timestamp:    string;
 }
 
 export interface ClosestApproach {
@@ -106,6 +107,46 @@ export interface GlobeCollisionsResponse {
   collisions: GlobeCollision[];
 }
 
+// ── Trajectory types ──
+
+export type OrbitalRegime = 'LEO' | 'MEO' | 'HEO' | 'GEO';
+
+export interface TrajectoryPoint {
+  timestamp:   string;
+  x:           number;
+  y:           number;
+  z:           number;
+  vx:          number;
+  vy:          number;
+  vz:          number;
+  altitude_km: number;
+  speed_kms:   number;
+  lat:         number;
+  lon:         number;
+}
+
+export interface TrajectoryResponse {
+  norad_id:    string;
+  n_points:    number;
+  regime:      OrbitalRegime;
+  mean_alt_km: number;
+  trajectory:  TrajectoryPoint[];
+}
+
+export interface TrajectoryObjectSummary {
+  norad_id:    number;
+  regime:      OrbitalRegime;
+  mean_alt_km: number;
+  lats:        number[];
+  lons:        number[];
+  n_points:    number;
+}
+
+export interface AllTrajectoriesResponse {
+  count:   number;
+  objects: TrajectoryObjectSummary[];
+}
+
 // ── Reference-compatible types ──
 
 export interface SimulationTimeResponse {
@@ -162,4 +203,70 @@ export interface CollisionPair {
 export interface CollisionFrequencyResponse {
   count: number;
   pairs: CollisionPair[];
+}
+
+// ── TSA Pipeline types ──
+
+export interface ModelBenchmark {
+  model:   string;
+  rmse_km: number;
+  mae_km:  number;
+  mape?:   number | null;
+}
+
+export interface ForecastPoint {
+  step:     number;
+  actual:   number | null;
+  forecast: number;
+}
+
+export interface ForecastResults {
+  sample_norad_id:   number;
+  forecast_horizon:  number;
+  models:            ModelBenchmark[];
+  forecasts?:        Record<string, ForecastPoint[]>;
+  generated_at:      string;
+}
+
+export interface PipelineMeta {
+  generated_at:   string;
+  n_objects:      number;
+  n_timesteps:    number;
+  tle_file:       string;
+  best_model?:    string;
+  best_rmse_km?:  number;
+}
+
+export interface DashboardState {
+  stats:         StatsResponse;
+  ml_metrics:    ForecastResults;
+  pipeline_meta: PipelineMeta;
+}
+
+export interface ConjunctionAlert {
+  norad_id_1:            string;
+  norad_id_2:            string;
+  distance_km:           number;
+  risk_level:            RiskLevel;
+  collision_probability: number;
+  relative_velocity_kms: number;
+  tca:                   string;
+  altitude_km_1:         number;
+  altitude_km_2:         number;
+}
+
+export interface ConjunctionReport {
+  n_objects:    number;
+  n_alerts:     number;
+  screen_km:    number;
+  alerts:       ConjunctionAlert[];
+  generated_at: string;
+}
+
+export interface PipelineStatusResponse {
+  status:     string;
+  last_run:   string;
+  total_runs: number;
+  runs:       PipelineMeta[];
+  message?:   string;
 }

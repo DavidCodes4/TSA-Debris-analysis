@@ -14,7 +14,7 @@ Outputs (saved to OUTPUT_DIR):
   metadata.json          — run stats, object list, config
 """
 
-import os, json, logging, argparse
+import os, json, logging, argparse, glob
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -124,26 +124,50 @@ def run(tle_file: str = TLE_FILE,
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Parse TLE file
-    tle_path = RAW_DIR / tle_file
-    raw_df = _parse_tle_file(tle_path, max_records)
+    # 1. Parse TLE file(s)
+    # Special value "ALL" → load every .txt file in RAW_DIR
+    if tle_file.upper() == "ALL":
+        tle_paths = sorted(RAW_DIR.glob("*.txt"))
+        if not tle_paths:
+            raise FileNotFoundError(f"No TLE .txt files found in {RAW_DIR}")
+        log.info(f"Loading ALL {len(tle_paths)} TLE files from {RAW_DIR} …")
+        frames = []
+        per_file = max(max_records // len(tle_paths), 5000)
+        for p in tle_paths:
+            try:
+                frames.append(_parse_tle_file(p, per_file))
+            except Exception as e:
+                log.warning(f"  Skipping {p.name}: {e}")
+        raw_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        used_tle_label = "ALL"
+    else:
+        tle_path = RAW_DIR / tle_file
+        raw_df = _parse_tle_file(tle_path, max_records)
+        used_tle_label = tle_file
 
-    # 2. Keep one TLE per object (latest epoch)
+    # 2. Keep one TLE per object (latest epoch across all files)
     raw_df = (raw_df.sort_values("epoch")
               .groupby("norad_id", as_index=False).last())
-    log.info(f"Unique objects: {len(raw_df):,}")
+    log.info(f"Unique objects across all sources: {len(raw_df):,}")
 
     # 3. Select TOP_N by recency (largest epoch)
     candidates = raw_df.nlargest(top_n * 3, "epoch")   # over-select then filter
 
-    # 4. SGP4 densification (physically accurate propagation)
+    # 4. SGP4 densification — ALL objects propagated from the SAME reference
+    #    start time so their position grids overlap and conjunction screening works.
+    #    Use the median epoch of the selected candidates as the common start,
+    #    which keeps propagation error small while ensuring overlap.
+    ref_start = pd.Timestamp(candidates["epoch"].median()).tz_localize("UTC") \
+        if candidates["epoch"].median().tzinfo is None \
+        else pd.Timestamp(candidates["epoch"].median()).tz_convert("UTC")
     log.info(f"SGP4 densification ({resample_min}-min steps, "
-             f"{propagate_hrs}h horizon) …")
+             f"{propagate_hrs}h horizon, ref_start={ref_start.date()}) …")
     all_ts = []
     ok = 0
     for _, row in candidates.iterrows():
         ts_df_obj = _densify_object(
-            row["norad_id"], row["tle1"], row["tle2"], row["epoch"],
+            row["norad_id"], row["tle1"], row["tle2"],
+            ref_start,          # ← common start for all objects
             resample_min, propagate_hrs)
         if len(ts_df_obj) < 2:
             continue
@@ -181,7 +205,8 @@ def run(tle_file: str = TLE_FILE,
 
     meta = {
         "run_timestamp": datetime.now(timezone.utc).isoformat(),
-        "tle_file":      tle_file,
+        "tle_file":      used_tle_label,
+        "ref_start":     ref_start.isoformat(),
         "n_objects":     n_objects,
         "n_timesteps":   n_steps,
         "resample_min":  resample_min,
@@ -200,7 +225,8 @@ def run(tle_file: str = TLE_FILE,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Space Debris — Data Pipeline")
-    parser.add_argument("--tle-file",       default=TLE_FILE)
+    parser.add_argument("--tle-file",       default=TLE_FILE,
+                        help="TLE filename in data/raw/, or 'ALL' to load every year")
     parser.add_argument("--max-records",    type=int, default=MAX_RECORDS)
     parser.add_argument("--top-n",          type=int, default=TOP_N)
     parser.add_argument("--resample-min",   type=int, default=RESAMPLE_MIN)

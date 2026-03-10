@@ -16,6 +16,7 @@ Risk thresholds (standard NASA/ESA screening):
 Outputs (OUTPUT_DIR):
   collision_alerts_forecast/part-00000.csv  ← dashboard_api.py CSV fallback
   conjunction_report.json                   ← full machine-readable report
+  collision_history.parquet                 ← cumulative history across all runs
 """
 
 import json, logging, argparse, math
@@ -34,14 +35,14 @@ log = logging.getLogger(__name__)
 OUTPUT_DIR     = Path(__file__).resolve().parents[2] / "Output"
 
 # Screening thresholds (km)
-SCREEN_KM      = 50.0
+SCREEN_KM      = 100.0     # widened: catches more real close-approaches
 CRITICAL_KM    = 1.0
 HIGH_KM        = 5.0
 MEDIUM_KM      = 20.0
 
 # Screen only the first SCREEN_HOURS hours of the common time window
-SCREEN_HOURS   = 24.0
-MAX_PAIRS      = 5000     # cap to avoid O(n²) explosion
+SCREEN_HOURS   = 72.0      # full propagation window
+MAX_PAIRS      = 19900     # screen ALL pairs for 200 objects (200*199/2)
 
 
 def _risk(dist_km: float) -> str:
@@ -69,7 +70,9 @@ def _collision_probability(dist_km: float,
 
 def run(output_dir: Path = OUTPUT_DIR,
         screen_km: float = SCREEN_KM,
-        screen_hours: float = SCREEN_HOURS) -> pd.DataFrame:
+        screen_hours: float = SCREEN_HOURS,
+        tle_file: str = "unknown",
+        append_history: bool = True) -> pd.DataFrame:
 
     output_dir = Path(output_dir)
     ts_path    = output_dir / "ts_df.parquet"
@@ -81,36 +84,39 @@ def run(output_dir: Path = OUTPUT_DIR,
     ts_df = pd.read_parquet(ts_path)
     ts_df["timestamp"] = pd.to_datetime(ts_df["timestamp"], utc=True)
 
-    # Pivot to wide format: one row per timestamp, columns = (norad_id, axis)
     ids = ts_df["norad_id"].unique().tolist()
     log.info(f"Screening {len(ids)} objects for conjunctions …")
 
-    # Find common time window
-    t_start = ts_df.groupby("norad_id")["timestamp"].min().max()
-    t_end   = t_start + pd.Timedelta(hours=screen_hours)
-    window  = ts_df[(ts_df["timestamp"] >= t_start) &
-                    (ts_df["timestamp"] <= t_end)].copy()
-
-    # Build position dict: norad_id → (T, 3) array indexed by common timestamps
-    common_ts = sorted(window["timestamp"].unique())
-    pos = {}
+    # ── Build per-object position series (no global grid requirement) ─────────
+    # Each object keeps its own timestamps; we interpolate only within pairs.
+    RESAMPLE = "5min"   # normalise to a fixed 5-min grid per object
+    pos = {}            # norad_id → DataFrame(index=timestamp, cols=[x,y,z])
     for nid in ids:
-        sub = (window[window["norad_id"] == nid]
-               .set_index("timestamp")[["x", "y", "z"]])
-        sub = sub.reindex(common_ts)
+        sub = (ts_df[ts_df["norad_id"] == nid]
+               .set_index("timestamp")[["x", "y", "z"]]
+               .sort_index())
+        # Clip to screen_hours window starting from this object's first timestamp
+        t0 = sub.index.min()
+        sub = sub[sub.index <= t0 + pd.Timedelta(hours=screen_hours)]
+        if len(sub) < 2:
+            continue
+        # Resample to uniform 5-min grid using linear interpolation
+        new_idx = pd.date_range(sub.index.min(), sub.index.max(), freq=RESAMPLE)
+        sub = sub.reindex(sub.index.union(new_idx)).interpolate("time").reindex(new_idx)
         if sub.isnull().any().any():
-            sub = sub.interpolate(method="time", limit_direction="both")
-        if not sub.isnull().any().any():
-            pos[nid] = sub.values   # (T, 3)
+            sub = sub.dropna()
+        if len(sub) >= 2:
+            pos[nid] = sub
 
     valid_ids = list(pos.keys())
-    log.info(f"  Objects with full coverage: {len(valid_ids)}")
+    log.info(f"  Objects available for pairing: {len(valid_ids)}")
 
     if len(valid_ids) < 2:
-        log.warning("Not enough objects for conjunction screening.")
+        log.warning("Not enough objects for conjunction screening. "
+                    "Try re-running step 1 (make step1) first.")
         return pd.DataFrame()
 
-    # Limit pairs
+    # ── Sample pairs ─────────────────────────────────────────────────────────
     pair_list = list(combinations(valid_ids, 2))
     if len(pair_list) > MAX_PAIRS:
         log.warning(f"Capping to {MAX_PAIRS} random pairs (of {len(pair_list)})")
@@ -120,26 +126,43 @@ def run(output_dir: Path = OUTPUT_DIR,
 
     alerts = []
     for n1, n2 in pair_list:
-        p1 = pos[n1]   # (T, 3)
-        p2 = pos[n2]   # (T, 3)
-        diffs = p1 - p2
-        dists = np.linalg.norm(diffs, axis=1)   # (T,)
-        tca_idx = int(np.argmin(dists))
+        df1 = pos[n1]
+        df2 = pos[n2]
+
+        # Intersect their individual time grids
+        common_ts = df1.index.intersection(df2.index)
+        if len(common_ts) < 2:
+            # No overlap at all — interpolate n2 onto n1's grid
+            common_ts = df1.index
+            df2_aligned = df2.reindex(df2.index.union(common_ts)).interpolate("time").reindex(common_ts)
+            if df2_aligned.isnull().any().any():
+                continue
+            p1 = df1.loc[common_ts].values
+            p2 = df2_aligned.values
+        else:
+            p1 = df1.loc[common_ts].values
+            p2 = df2.loc[common_ts].values
+
+        diffs    = p1 - p2
+        dists    = np.linalg.norm(diffs, axis=1)
+        tca_idx  = int(np.argmin(dists))
         tca_dist = float(dists[tca_idx])
 
         if tca_dist > screen_km:
             continue
 
-        tca_ts  = common_ts[tca_idx]
-        risk    = _risk(tca_dist)
+        tca_ts = common_ts[tca_idx]
+        risk   = _risk(tca_dist)
 
         # Relative velocity at TCA
         if tca_idx > 0:
-            dt_sec  = (common_ts[tca_idx] -
-                       common_ts[tca_idx - 1]).total_seconds()
-            dv1 = (p1[tca_idx] - p1[tca_idx - 1]) / dt_sec   # km/s
-            dv2 = (p2[tca_idx] - p2[tca_idx - 1]) / dt_sec
-            rel_vel = float(np.linalg.norm(dv1 - dv2))
+            dt_sec = (common_ts[tca_idx] - common_ts[tca_idx - 1]).total_seconds()
+            if dt_sec > 0:
+                dv1 = (p1[tca_idx] - p1[tca_idx - 1]) / dt_sec
+                dv2 = (p2[tca_idx] - p2[tca_idx - 1]) / dt_sec
+                rel_vel = float(np.linalg.norm(dv1 - dv2))
+            else:
+                rel_vel = 0.0
         else:
             rel_vel = 0.0
 
@@ -198,6 +221,7 @@ def run(output_dir: Path = OUTPUT_DIR,
     # 2. JSON report
     report = {
         "run_timestamp": datetime.now(timezone.utc).isoformat(),
+        "tle_file":      tle_file,
         "n_objects":     len(valid_ids),
         "n_pairs":       len(pair_list),
         "screen_km":     screen_km,
@@ -211,6 +235,24 @@ def run(output_dir: Path = OUTPUT_DIR,
         json.dump(report, f, indent=2, default=str)
     log.info(f"Saved → {output_dir / 'conjunction_report.json'}")
 
+    # 3. Cumulative history parquet — append new alerts across all runs
+    if append_history and not alerts_df.empty:
+        history_path = output_dir / "collision_history.parquet"
+        alerts_df["tle_source"] = tle_file
+        alerts_df["run_tag"]    = ts_tag
+        if history_path.exists():
+            existing = pd.read_parquet(history_path)
+            # Deduplicate by (norad_id_1, norad_id_2, detection_timestamp)
+            combined = pd.concat([existing, alerts_df], ignore_index=True)
+            combined = combined.drop_duplicates(
+                subset=["norad_id_1", "norad_id_2", "detection_timestamp"],
+                keep="last"
+            ).reset_index(drop=True)
+        else:
+            combined = alerts_df
+        combined.to_parquet(history_path, index=False)
+        log.info(f"History: {len(combined):,} total events → {history_path}")
+
     log.info("✅ Conjunction assessment complete.")
     return alerts_df
 
@@ -220,11 +262,16 @@ def run(output_dir: Path = OUTPUT_DIR,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Space Debris — Conjunction Assessment")
-    parser.add_argument("--output-dir",    default=str(OUTPUT_DIR))
-    parser.add_argument("--screen-km",     type=float, default=SCREEN_KM)
-    parser.add_argument("--screen-hours",  type=float, default=SCREEN_HOURS)
+    parser.add_argument("--output-dir",       default=str(OUTPUT_DIR))
+    parser.add_argument("--screen-km",        type=float, default=SCREEN_KM)
+    parser.add_argument("--screen-hours",     type=float, default=SCREEN_HOURS)
+    parser.add_argument("--tle-file",         default="unknown")
+    parser.add_argument("--no-history",       action="store_true",
+                        help="Do not append to collision_history.parquet")
     args = parser.parse_args()
 
     run(output_dir=Path(args.output_dir),
         screen_km=args.screen_km,
-        screen_hours=args.screen_hours)
+        screen_hours=args.screen_hours,
+        tle_file=args.tle_file,
+        append_history=not args.no_history)
